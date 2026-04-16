@@ -1,7 +1,6 @@
 import React, { useRef, useEffect, useState } from "react";
 import * as faceapi from "face-api.js";
 
-// Define a type for our new detailed face data
 interface FaceData {
   gender: string;
   genderProbability: number;
@@ -12,21 +11,18 @@ interface FaceData {
 
 const FaceDetector: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null); // NEW: Canvas for drawing
 
-  // States
   const [isModelLoaded, setIsModelLoaded] = useState<boolean>(false);
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string>("");
   const [detectionStatus, setDetectionStatus] = useState<string>(
     "Loading AI Models...",
   );
-
-  // New state to hold our expanded data
   const [faceData, setFaceData] = useState<FaceData | null>(null);
-
   const [intervalId, setIntervalId] = useState<NodeJS.Timeout | null>(null);
 
-  // 1. Load the models
+  // 1. Load ALL models
   useEffect(() => {
     const loadModels = async () => {
       try {
@@ -34,8 +30,8 @@ const FaceDetector: React.FC = () => {
         await Promise.all([
           faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
           faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL),
-          // Add the new expression model here!
           faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
+          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL), // NEW: For drawing face points
         ]);
 
         setIsModelLoaded(true);
@@ -43,7 +39,7 @@ const FaceDetector: React.FC = () => {
       } catch (error) {
         console.error("Error loading models:", error);
         setDetectionStatus(
-          "Error loading models. Did you add the expression models?",
+          "Error loading models. Check your public/models folder.",
         );
       }
     };
@@ -64,15 +60,21 @@ const FaceDetector: React.FC = () => {
     if (intervalId) clearInterval(intervalId);
     setIsCameraActive(false);
     setFaceData(null);
+
+    // Clear the canvas drawing when stopping
+    if (canvasRef.current) {
+      const ctx = canvasRef.current.getContext("2d");
+      ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    }
   };
 
-  // 2. Start the webcam
+  // 2. Start Webcam
   const startWebcam = async () => {
     setCameraError("");
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setCameraError(
-        "Camera API is blocked by your browser. You MUST open this link using HTTPS.",
+        "Camera API is blocked. You MUST open this link using HTTPS.",
       );
       setIsCameraActive(false);
       return;
@@ -96,32 +98,61 @@ const FaceDetector: React.FC = () => {
     }
   };
 
-  // 3. Handle video play and start detecting
+  // 3. Detect and DRAW
   const handleVideoOnPlay = () => {
     if (intervalId) clearInterval(intervalId);
 
     const id = setInterval(async () => {
-      if (videoRef.current && isModelLoaded) {
-        // Chain the new .withFaceExpressions() method
+      if (videoRef.current && canvasRef.current && isModelLoaded) {
+        // Run full detection
         const detection = await faceapi
           .detectSingleFace(
             videoRef.current,
             new faceapi.TinyFaceDetectorOptions(),
           )
+          .withFaceLandmarks() // NEW: Get face points
           .withAgeAndGender()
           .withFaceExpressions();
 
         if (detection) {
           setDetectionStatus("Face Tracked!");
 
-          // Extract Gender and Age
+          // --- DRAWING LOGIC ---
+          // Match canvas size to the video size
+          const displaySize = {
+            width: videoRef.current.videoWidth,
+            height: videoRef.current.videoHeight,
+          };
+          faceapi.matchDimensions(canvasRef.current, displaySize);
+
+          // Resize the AI detection box to match the video size
+          const resizedDetection = faceapi.resizeResults(
+            detection,
+            displaySize,
+          );
+
+          // Clear previous drawing
+          canvasRef.current
+            .getContext("2d")
+            ?.clearRect(
+              0,
+              0,
+              canvasRef.current.width,
+              canvasRef.current.height,
+            );
+
+          // Draw the Box and the facial points!
+          faceapi.draw.drawDetections(canvasRef.current, resizedDetection);
+          faceapi.draw.drawFaceLandmarks(canvasRef.current, resizedDetection);
+          // ---------------------
+
+          // Extract Data for Dashboard
           const gender = detection.gender === "male" ? "Man" : "Woman";
           const genderProbability = Math.round(
             detection.genderProbability * 100,
           );
           const age = Math.round(detection.age);
 
-          // Extract the dominant emotion (highest probability)
           const expressions = detection.expressions;
           const sortedExpressions = Object.entries(expressions).sort(
             (a, b) => b[1] - a[1],
@@ -129,7 +160,6 @@ const FaceDetector: React.FC = () => {
           const [dominantExpression, expressionProb] = sortedExpressions[0];
           const expressionProbability = Math.round(expressionProb * 100);
 
-          // Save it to state to display
           setFaceData({
             gender,
             genderProbability,
@@ -139,10 +169,19 @@ const FaceDetector: React.FC = () => {
           });
         } else {
           setDetectionStatus("No face detected in frame.");
-          setFaceData(null); // Clear data if face leaves frame
+          setFaceData(null);
+          // Clear canvas if no face is found
+          canvasRef.current
+            .getContext("2d")
+            ?.clearRect(
+              0,
+              0,
+              canvasRef.current.width,
+              canvasRef.current.height,
+            );
         }
       }
-    }, 500);
+    }, 100); // Changed to 100ms for smoother visual tracking!
 
     setIntervalId(id);
   };
@@ -158,9 +197,8 @@ const FaceDetector: React.FC = () => {
         padding: "0 20px",
       }}
     >
-      <h2>AI Face Analyzer</h2>
+      <h2>AI Face Analyzer Pro</h2>
 
-      {/* Main Status Bar */}
       <div
         style={{
           marginBottom: "20px",
@@ -180,7 +218,6 @@ const FaceDetector: React.FC = () => {
         )}
       </div>
 
-      {/* NEW: Data Dashboard (Only shows when a face is detected) */}
       {faceData && (
         <div
           style={{
@@ -258,26 +295,38 @@ const FaceDetector: React.FC = () => {
         </button>
       )}
 
-      {/* Video Container - Now Mobile Responsive! */}
+      {/* Video Container */}
       <div
         style={{
           position: "relative",
           width: "100%",
           maxWidth: "640px",
-          aspectRatio: "4/3",
           backgroundColor: "#000",
           display: isCameraActive ? "block" : "none",
           borderRadius: "8px",
           overflow: "hidden",
         }}
       >
+        {/* The Live Video */}
         <video
           ref={videoRef}
           autoPlay
           muted
           playsInline
           onPlay={handleVideoOnPlay}
-          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          style={{ width: "100%", height: "auto", display: "block" }}
+        />
+
+        {/* NEW: The Canvas Overlay perfectly positioned over the video */}
+        <canvas
+          ref={canvasRef}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+          }}
         />
       </div>
     </div>

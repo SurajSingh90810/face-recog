@@ -26,7 +26,7 @@ const FaceDetector: React.FC = () => {
   useEffect(() => {
     const loadModels = async () => {
       try {
-        const MODEL_URL = import.meta.env.BASE_URL + "models";
+        const MODEL_URL = "/models";
         await Promise.all([
           faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
           faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL),

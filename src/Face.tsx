@@ -115,26 +115,25 @@ const FaceDetector: React.FC = () => {
   };
 
   // 3. Detect and DRAW
+  // 3. Detect and DRAW
   const handleVideoOnPlay = () => {
     if (intervalId) clearInterval(intervalId);
 
     const id = setInterval(async () => {
       if (videoRef.current && canvasRef.current && isModelLoaded) {
         
-        // --- CRITICAL MOBILE FIX ---
-        if (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
+        // Wait until the video has actual dimensions on the screen
+        if (videoRef.current.clientWidth === 0 || videoRef.current.clientHeight === 0) {
           return;
         }
-        videoRef.current.width = videoRef.current.videoWidth;
-        videoRef.current.height = videoRef.current.videoHeight;
-        // ---------------------------
 
         const detection = await faceapi
           .detectSingleFace(
             videoRef.current,
+            // --- ULTIMATE MOBILE FIX ---
             new faceapi.TinyFaceDetectorOptions({ 
-              inputSize: 416, 
-              scoreThreshold: 0.2 // Lower strictness for mobile
+              inputSize: 224,      // Lower resolution processes MUCH better on mobile
+              scoreThreshold: 0.1  // Drop strictness to 10%. If it sees even a hint of a face, it tracks it!
             })
           )
           .withFaceLandmarks()
@@ -144,10 +143,10 @@ const FaceDetector: React.FC = () => {
         if (detection) {
           setDetectionStatus("Face Tracked!");
 
-          // Match canvas size to the RAW video size
+          // Use clientWidth instead of videoWidth! This fixes the mobile squishing bug.
           const displaySize = {
-            width: videoRef.current.videoWidth,
-            height: videoRef.current.videoHeight,
+            width: videoRef.current.clientWidth,
+            height: videoRef.current.clientHeight,
           };
           
           faceapi.matchDimensions(canvasRef.current, displaySize);
@@ -188,7 +187,7 @@ const FaceDetector: React.FC = () => {
           canvasRef.current.getContext("2d")?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
         }
       }
-    }, 100);
+    }, 150); // Slightly slower interval (150ms) gives the mobile processor more time to breathe
 
     setIntervalId(id);
   };

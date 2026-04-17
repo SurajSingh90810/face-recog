@@ -8,33 +8,34 @@ interface FaceData {
   expression: string;
   expressionProbability: number;
 }
-                                
-const FaceDetector: React.FC = () => {                                
-  const videoRef = useRef<HTMLVideoElement | null>(null);                                
-  const canvasRef = useRef<HTMLCanvasElement | null>(null); // NEW: Canvas for drawingsdsg                                
-                                
-  const [isModelLoaded, setIsModelLoaded] = useState<boolean>(false);                                
-  const [isCameraActive, setIsCameraActive] = useState<boolean>(false);                                
-  const [cameraError, setCameraError] = useState<string>("");                                
-  const [detectionStatus, setDetectionStatus] = useState<string>(                                
-    "Loading AI Models...",                                
-  );                                        
-  const [faceData, setFaceData] = useState<FaceData | null>(null);                                
-  const [intervalId, setIntervalId] = useState<NodeJS.Timeout | null>(null);                                
-                                
-  // 1. Load ALL models                                
+
+const FaceDetector: React.FC = () => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  
+  // FIX 1: Guard to prevent overlapping detection cycles from freezing the browser
+  const isDetecting = useRef<boolean>(false);
+
+  const [isModelLoaded, setIsModelLoaded] = useState<boolean>(false);
+  const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
+  const [cameraError, setCameraError] = useState<string>("");
+  const [detectionStatus, setDetectionStatus] = useState<string>(
+    "Loading AI Models..."
+  );
+  const [faceData, setFaceData] = useState<FaceData | null>(null);
+  const [intervalId, setIntervalId] = useState<NodeJS.Timeout | null>(null);
+
   // 1. Load ALL models
   useEffect(() => {
     const loadModels = async () => {
       try {
-        // FIX: Use Vite's BASE_URL so it maps correctly over the local network IP
-        const MODEL_URL = import.meta.env.BASE_URL + "models"; 
-        
+        const MODEL_URL = "/models";
         await Promise.all([
           faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
           faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL),
           faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
-          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL), // NEW: For drawing face points
+          // FIX 2: Use the Tiny Landmark Net you have in your folder for much better FPS
+          faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL), 
         ]);
 
         setIsModelLoaded(true);
@@ -52,7 +53,7 @@ const FaceDetector: React.FC = () => {
     return () => {
       stopWebcam();
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps; // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stopWebcam = () => {
     if (videoRef.current && videoRef.current.srcObject) {
@@ -77,7 +78,7 @@ const FaceDetector: React.FC = () => {
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setCameraError(
-        "Camera API is blocked. You MUST open this link using HTTPS.",
+        "Camera API is blocked. You MUST open this link using HTTPS."
       );
       setIsCameraActive(false);
       return;
@@ -106,14 +107,27 @@ const FaceDetector: React.FC = () => {
     if (intervalId) clearInterval(intervalId);
 
     const id = setInterval(async () => {
-      if (videoRef.current && canvasRef.current && isModelLoaded) {
+      // FIX 3: Ensure video is ready (readyState === 4) and prevent overlapping runs
+      if (
+        isDetecting.current || 
+        !videoRef.current || 
+        videoRef.current.readyState !== 4 || 
+        !canvasRef.current || 
+        !isModelLoaded
+      ) {
+        return; 
+      }
+
+      isDetecting.current = true; // Lock
+
+      try {
+        // FIX 4: Lower the score threshold slightly so it catches faces easier
+        const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.3 });
+
         // Run full detection
         const detection = await faceapi
-          .detectSingleFace(
-            videoRef.current,
-            new faceapi.TinyFaceDetectorOptions(),
-          )
-          .withFaceLandmarks() // NEW: Get face points
+          .detectSingleFace(videoRef.current, options)
+          .withFaceLandmarks(true) // 'true' tells it to use the TinyLandmarkNet
           .withAgeAndGender()
           .withFaceExpressions();
 
@@ -121,44 +135,29 @@ const FaceDetector: React.FC = () => {
           setDetectionStatus("Face Tracked!");
 
           // --- DRAWING LOGIC ---
-          // Match canvas size to the video size
           const displaySize = {
             width: videoRef.current.videoWidth,
             height: videoRef.current.videoHeight,
           };
           faceapi.matchDimensions(canvasRef.current, displaySize);
 
-          // Resize the AI detection box to match the video size
-          const resizedDetection = faceapi.resizeResults(
-            detection,
-            displaySize,
-          );
+          const resizedDetection = faceapi.resizeResults(detection, displaySize);
 
-          // Clear previous drawing
           canvasRef.current
             .getContext("2d")
-            ?.clearRect(
-              0,
-              0,
-              canvasRef.current.width,
-              canvasRef.current.height,
-            );
+            ?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
 
-          // Draw the Box and the facial points!
           faceapi.draw.drawDetections(canvasRef.current, resizedDetection);
           faceapi.draw.drawFaceLandmarks(canvasRef.current, resizedDetection);
-          // ---------------------
 
           // Extract Data for Dashboard
           const gender = detection.gender === "male" ? "Man" : "Woman";
-          const genderProbability = Math.round(
-            detection.genderProbability * 100,
-          );
+          const genderProbability = Math.round(detection.genderProbability * 100);
           const age = Math.round(detection.age);
 
           const expressions = detection.expressions;
           const sortedExpressions = Object.entries(expressions).sort(
-            (a, b) => b[1] - a[1],
+            (a, b) => b[1] - a[1]
           );
           const [dominantExpression, expressionProb] = sortedExpressions[0];
           const expressionProbability = Math.round(expressionProb * 100);
@@ -171,20 +170,16 @@ const FaceDetector: React.FC = () => {
             expressionProbability,
           });
         } else {
-          setDetectionStatus("No face detected in frame.");
-          setFaceData(null);
-          // Clear canvas if no face is found
-          canvasRef.current
-            .getContext("2d")
-            ?.clearRect(
-              0,
-              0,
-              canvasRef.current.width,
-              canvasRef.current.height,
-            );
+          setDetectionStatus("No face detected in frame. Bring face closer.");
+          // FIX 5: We intentionally DON'T clear the UI / Canvas immediately here.
+          // This prevents the UI cards from violently flickering if it misses a single frame.
         }
+      } catch (err) {
+        console.error("Detection processing error:", err);
+      } finally {
+        isDetecting.current = false; // Release Lock
       }
-    }, 100); // Changed to 100ms for smoother visual tracking!
+    }, 150); // Changed to 150ms for better stability
 
     setIntervalId(id);
   };
@@ -310,7 +305,6 @@ const FaceDetector: React.FC = () => {
           overflow: "hidden",
         }}
       >
-        {/* The Live Video */}
         <video
           ref={videoRef}
           autoPlay
@@ -319,8 +313,6 @@ const FaceDetector: React.FC = () => {
           onPlay={handleVideoOnPlay}
           style={{ width: "100%", height: "auto", display: "block" }}
         />
-
-        {/* NEW: The Canvas Overlay perfectly positioned over the video */}
         <canvas
           ref={canvasRef}
           style={{

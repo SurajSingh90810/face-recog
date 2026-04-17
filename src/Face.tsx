@@ -23,10 +23,13 @@ const FaceDetector: React.FC = () => {
   const [intervalId, setIntervalId] = useState<NodeJS.Timeout | null>(null);                                
                                 
   // 1. Load ALL models                                
-  useEffect(() => {                                
+  // 1. Load ALL models
+  useEffect(() => {
     const loadModels = async () => {
       try {
-        const MODEL_URL = "/models";
+        // FIX: Use Vite's BASE_URL so it maps correctly over the local network IP
+        const MODEL_URL = import.meta.env.BASE_URL + "models"; 
+        
         await Promise.all([
           faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
           faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL),
@@ -39,7 +42,7 @@ const FaceDetector: React.FC = () => {
       } catch (error) {
         console.error("Error loading models:", error);
         setDetectionStatus(
-          "Error loading models. Check your public/models folder.",
+          "Error loading models. Check your public/models folder."
         );
       }
     };
@@ -49,7 +52,7 @@ const FaceDetector: React.FC = () => {
     return () => {
       stopWebcam();
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps; // eslint-disable-line react-hooks/exhaustive-deps
 
   const stopWebcam = () => {
     if (videoRef.current && videoRef.current.srcObject) {

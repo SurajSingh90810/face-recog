@@ -8,22 +8,22 @@ interface FaceData {
   expression: string;
   expressionProbability: number;
 }
-
-const FaceDetector: React.FC = () => {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null); // NEW: Canvas for drawing
-
-  const [isModelLoaded, setIsModelLoaded] = useState<boolean>(false);
-  const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
-  const [cameraError, setCameraError] = useState<string>("");
-  const [detectionStatus, setDetectionStatus] = useState<string>(
-    "Loading AI Models...",
-  );
-  const [faceData, setFaceData] = useState<FaceData | null>(null);
-  const [intervalId, setIntervalId] = useState<NodeJS.Timeout | null>(null);
-
-  // 1. Load ALL models
-  useEffect(() => {
+                                
+const FaceDetector: React.FC = () => {                                
+  const videoRef = useRef<HTMLVideoElement | null>(null);                                
+  const canvasRef = useRef<HTMLCanvasElement | null>(null); // NEW: Canvas for drawingsdsg                                
+                                
+  const [isModelLoaded, setIsModelLoaded] = useState<boolean>(false);                                
+  const [isCameraActive, setIsCameraActive] = useState<boolean>(false);                                
+  const [cameraError, setCameraError] = useState<string>("");                                
+  const [detectionStatus, setDetectionStatus] = useState<string>(                                
+    "Loading AI Models...",                                
+  );                                        
+  const [faceData, setFaceData] = useState<FaceData | null>(null);                                
+  const [intervalId, setIntervalId] = useState<NodeJS.Timeout | null>(null);                                
+                                
+  // 1. Load ALL models                                
+  useEffect(() => {                                
     const loadModels = async () => {
       try {
         const MODEL_URL = "/models";

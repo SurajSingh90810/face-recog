@@ -8,7 +8,7 @@ interface FaceData {
   expression: string;
   expressionProbability: number;
 }
-
+   
 const FaceDetector: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null); // NEW: Canvas for drawing

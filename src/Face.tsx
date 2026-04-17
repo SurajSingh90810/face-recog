@@ -13,20 +13,15 @@ const FaceDetector: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // NEW: A reference to prevent spamming the database
+  // A reference to prevent spamming the database
   const hasSavedRef = useRef<boolean>(false);
 
   const [isModelLoaded, setIsModelLoaded] = useState<boolean>(false);
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string>("");
-  const [detectionStatus, setDetectionStatus] = useState<string>(
-    "Loading AI Models...",
-  );
+  const [detectionStatus, setDetectionStatus] = useState<string>("Loading AI Models...");
   const [faceData, setFaceData] = useState<FaceData | null>(null);
-
-  // NEW: State to control the success popup
   const [showPopup, setShowPopup] = useState<boolean>(false);
-
   const [intervalId, setIntervalId] = useState<NodeJS.Timeout | null>(null);
 
   // 1. Load ALL models
@@ -44,9 +39,7 @@ const FaceDetector: React.FC = () => {
         setDetectionStatus("Models loaded. Ready to start camera.");
       } catch (error) {
         console.error("Error loading models:", error);
-        setDetectionStatus(
-          "Error loading models. Check your public/models folder.",
-        );
+        setDetectionStatus("Error loading models. Check your public/models folder.");
       }
     };
     loadModels();
@@ -72,13 +65,11 @@ const FaceDetector: React.FC = () => {
 
   const startWebcam = async () => {
     setCameraError("");
-    hasSavedRef.current = false; // Reset whenever camera starts
+    hasSavedRef.current = false;
     setShowPopup(false);
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setCameraError(
-        "Camera API is blocked. You MUST open this link using HTTPS.",
-      );
+      setCameraError("Camera API is blocked. You MUST open this link using HTTPS.");
       return;
     }
     try {
@@ -96,32 +87,26 @@ const FaceDetector: React.FC = () => {
     }
   };
 
-  // NEW: Function to send data to your Node.js backend
+  // 2. Save to Database Function
   const saveToDatabase = async (data: FaceData) => {
     try {
-      // NOTE: Update this URL to match your backend port if it is not 5000!
-      const response = await fetch(
-        "http://localhost:5000/face-auth/addfaceauth",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(data),
+      // IMPORTANT: If deploying to Vercel, this must be changed to your live backend URL!
+      // localhost:5000 will only work when testing on your own computer.
+      const response = await fetch("http://localhost:5000/face-auth/addfaceauth", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
-      );
+        body: JSON.stringify(data),
+      });
 
       if (response.ok) {
         console.log("Data successfully saved to MongoDB!");
-        setShowPopup(true); // Trigger the popup UI
-
-        // Hide the popup after 3 seconds
-        setTimeout(() => {
-          setShowPopup(false);
-        }, 3000);
+        setShowPopup(true);
+        setTimeout(() => setShowPopup(false), 3000);
       } else {
         console.error("Failed to save data.");
-        hasSavedRef.current = false; // If it fails, open the gate to try again
+        hasSavedRef.current = false; // Open gate to try again
       }
     } catch (error) {
       console.error("API Connection Error:", error);
@@ -135,10 +120,22 @@ const FaceDetector: React.FC = () => {
 
     const id = setInterval(async () => {
       if (videoRef.current && canvasRef.current && isModelLoaded) {
+        
+        // --- CRITICAL MOBILE FIX ---
+        if (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
+          return;
+        }
+        videoRef.current.width = videoRef.current.videoWidth;
+        videoRef.current.height = videoRef.current.videoHeight;
+        // ---------------------------
+
         const detection = await faceapi
           .detectSingleFace(
             videoRef.current,
-            new faceapi.TinyFaceDetectorOptions(),
+            new faceapi.TinyFaceDetectorOptions({ 
+              inputSize: 416, 
+              scoreThreshold: 0.2 // Lower strictness for mobile
+            })
           )
           .withFaceLandmarks()
           .withAgeAndGender()
@@ -147,38 +144,26 @@ const FaceDetector: React.FC = () => {
         if (detection) {
           setDetectionStatus("Face Tracked!");
 
-          // --- DRAWING LOGIC ---
+          // Match canvas size to the RAW video size
           const displaySize = {
             width: videoRef.current.videoWidth,
             height: videoRef.current.videoHeight,
           };
+          
           faceapi.matchDimensions(canvasRef.current, displaySize);
-          const resizedDetection = faceapi.resizeResults(
-            detection,
-            displaySize,
-          );
-          canvasRef.current
-            .getContext("2d")
-            ?.clearRect(
-              0,
-              0,
-              canvasRef.current.width,
-              canvasRef.current.height,
-            );
+          const resizedDetection = faceapi.resizeResults(detection, displaySize);
+
+          // Clear and Draw
+          canvasRef.current.getContext("2d")?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
           faceapi.draw.drawDetections(canvasRef.current, resizedDetection);
           faceapi.draw.drawFaceLandmarks(canvasRef.current, resizedDetection);
-          // ---------------------
 
           // Extract Data
-          const genderProbability = Math.round(
-            detection.genderProbability * 100,
-          );
+          const genderProbability = Math.round(detection.genderProbability * 100);
           const gender = detection.gender === "male" ? "Man" : "Woman";
           const age = Math.round(detection.age);
-
-          const sortedExpressions = Object.entries(detection.expressions).sort(
-            (a, b) => b[1] - a[1],
-          );
+          
+          const sortedExpressions = Object.entries(detection.expressions).sort((a, b) => b[1] - a[1]);
           const [dominantExpression, expressionProb] = sortedExpressions[0];
           const expressionProbability = Math.round(expressionProb * 100);
 
@@ -192,26 +177,15 @@ const FaceDetector: React.FC = () => {
 
           setFaceData(currentFaceData);
 
-          // NEW: The 90% Confidence API Trigger
+          // The 90% Confidence API Trigger
           if (genderProbability >= 90 && !hasSavedRef.current) {
-            hasSavedRef.current = true; // Lock the gate immediately so it doesn't fire twice
-            saveToDatabase(currentFaceData); // Call your backend
+            hasSavedRef.current = true; 
+            saveToDatabase(currentFaceData); 
           }
         } else {
           setDetectionStatus("No face detected in frame.");
           setFaceData(null);
-          canvasRef.current
-            .getContext("2d")
-            ?.clearRect(
-              0,
-              0,
-              canvasRef.current.width,
-              canvasRef.current.height,
-            );
-
-          // Optional: If you want it to save again when a NEW face enters,
-          // uncomment the line below. Otherwise, it only saves once per camera session.
-          // hasSavedRef.current = false;
+          canvasRef.current.getContext("2d")?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
         }
       }
     }, 100);
@@ -220,119 +194,57 @@ const FaceDetector: React.FC = () => {
   };
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        marginTop: "20px",
-        fontFamily: "sans-serif",
-        padding: "0 20px",
-      }}
-    >
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: "20px", fontFamily: "sans-serif", padding: "0 20px" }}>
       <h2>AI Face Analyzer Pro</h2>
 
-      {/* NEW: Beautiful Success Popup */}
+      {/* Success Popup */}
       {showPopup && (
-        <div
-          style={{
-            position: "fixed",
-            top: "20px",
-            left: "50%",
-            transform: "translateX(-50%)",
-            backgroundColor: "#4caf50",
-            color: "white",
-            padding: "15px 30px",
-            borderRadius: "8px",
-            boxShadow: "0 4px 6px rgba(0,0,0,0.2)",
-            zIndex: 1000,
-            fontWeight: "bold",
-            fontSize: "18px",
-            animation: "fadeIn 0.5s",
-          }}
-        >
+        <div style={{
+          position: "fixed", top: "20px", left: "50%", transform: "translateX(-50%)",
+          backgroundColor: "#4caf50", color: "white", padding: "15px 30px",
+          borderRadius: "8px", boxShadow: "0 4px 6px rgba(0,0,0,0.2)",
+          zIndex: 1000, fontWeight: "bold", fontSize: "18px", animation: "fadeIn 0.5s"
+        }}>
           ✅ Face Detection Happened! Data Saved.
         </div>
       )}
 
-      <div
-        style={{
-          marginBottom: "20px",
-          padding: "15px",
-          backgroundColor: "#f0f0f0",
-          borderRadius: "8px",
-          width: "100%",
-          maxWidth: "400px",
-          textAlign: "center",
-        }}
-      >
+      {/* Status Bar */}
+      <div style={{ marginBottom: "20px", padding: "15px", backgroundColor: "#f0f0f0", borderRadius: "8px", width: "100%", maxWidth: "400px", textAlign: "center" }}>
         <h3 style={{ margin: "0 0 10px 0" }}>Status: {detectionStatus}</h3>
-        {cameraError && (
-          <p style={{ color: "red", fontWeight: "bold", margin: 0 }}>
-            {cameraError}
-          </p>
-        )}
+        {cameraError && <p style={{ color: "red", fontWeight: "bold", margin: 0 }}>{cameraError}</p>}
       </div>
 
+      {/* Data Cards */}
       {faceData && (
-        <div
-          style={{
-            display: "flex",
-            gap: "15px",
-            marginBottom: "20px",
-            flexWrap: "wrap",
-            justifyContent: "center",
-          }}
-        >
-          <div
-            style={{
-              padding: "10px 20px",
-              backgroundColor: "#e3f2fd",
-              borderRadius: "8px",
-              border: "1px solid #90caf9",
-              textAlign: "center",
-            }}
-          >
-            <p style={{ margin: "0", fontSize: "14px", color: "#1565c0" }}>
-              Gender
-            </p>
-            <h3 style={{ margin: "5px 0 0 0" }}>
-              {faceData.gender} ({faceData.genderProbability}%)
-            </h3>
+        <div style={{ display: "flex", gap: "15px", marginBottom: "20px", flexWrap: "wrap", justifyContent: "center" }}>
+          <div style={{ padding: "10px 20px", backgroundColor: "#e3f2fd", borderRadius: "8px", border: "1px solid #90caf9", textAlign: "center" }}>
+            <p style={{ margin: "0", fontSize: "14px", color: "#1565c0" }}>Gender</p>
+            <h3 style={{ margin: "5px 0 0 0" }}>{faceData.gender} ({faceData.genderProbability}%)</h3>
           </div>
-          {/* ... other data cards remain the same ... */}
+          <div style={{ padding: "10px 20px", backgroundColor: "#e8f5e9", borderRadius: "8px", border: "1px solid #a5d6a7", textAlign: "center" }}>
+            <p style={{ margin: "0", fontSize: "14px", color: "#2e7d32" }}>Estimated Age</p>
+            <h3 style={{ margin: "5px 0 0 0" }}>~{faceData.age} years</h3>
+          </div>
+          <div style={{ padding: "10px 20px", backgroundColor: "#fff3e0", borderRadius: "8px", border: "1px solid #ffcc80", textAlign: "center" }}>
+            <p style={{ margin: "0", fontSize: "14px", color: "#e65100" }}>Emotion</p>
+            <h3 style={{ margin: "5px 0 0 0", textTransform: "capitalize" }}>{faceData.expression} ({faceData.expressionProbability}%)</h3>
+          </div>
         </div>
       )}
 
+      {/* Enable Camera Button */}
       {isModelLoaded && !isCameraActive && (
         <button
           onClick={startWebcam}
-          style={{
-            padding: "12px 24px",
-            fontSize: "16px",
-            cursor: "pointer",
-            backgroundColor: "#007bff",
-            color: "white",
-            border: "none",
-            borderRadius: "6px",
-            marginBottom: "20px",
-          }}
+          style={{ padding: "12px 24px", fontSize: "16px", cursor: "pointer", backgroundColor: "#007bff", color: "white", border: "none", borderRadius: "6px", marginBottom: "20px" }}
         >
           Enable Camera
         </button>
       )}
 
-      <div
-        style={{
-          position: "relative",
-          width: "100%",
-          maxWidth: "640px",
-          backgroundColor: "#000",
-          display: isCameraActive ? "block" : "none",
-          borderRadius: "8px",
-          overflow: "hidden",
-        }}
-      >
+      {/* Video Container */}
+      <div style={{ position: "relative", width: "100%", maxWidth: "640px", backgroundColor: "#000", display: isCameraActive ? "block" : "none", borderRadius: "8px", overflow: "hidden" }}>
         <video
           ref={videoRef}
           autoPlay
@@ -343,13 +255,7 @@ const FaceDetector: React.FC = () => {
         />
         <canvas
           ref={canvasRef}
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            width: "100%",
-            height: "100%",
-          }}
+          style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
         />
       </div>
     </div>

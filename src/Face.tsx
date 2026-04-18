@@ -12,7 +12,8 @@ interface FaceData {
 const FaceDetector: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
+  const lastSavedTimeRef = useRef<number>(0);
+  
   // Gatekeepers
   const isDetectingRef = useRef<boolean>(false);
   const modelsLoadedRef = useRef<boolean>(false);
@@ -180,6 +181,37 @@ const FaceDetector: React.FC = () => {
             expression: dominantExpression,
             expressionProbability,
           });
+
+          // ---------------------------------------------------------
+          // NEW: Save data to MongoDB every 2 seconds, BUT ONLY if confidence is >= 90%
+          // ---------------------------------------------------------
+          const now = Date.now();
+          const SAVE_INTERVAL_MS = 2000;
+
+          if (now - lastSavedTimeRef.current > SAVE_INTERVAL_MS && genderProbability >= 90) {
+            lastSavedTimeRef.current = now;
+
+            try {
+              await fetch("http://localhost:5000/api/faces", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  gender,
+                  genderProbability,
+                  age,
+                  expression: dominantExpression,
+                  expressionProbability,
+                }),
+              });
+              console.log("Snapshot saved to database (High confidence hit)!");
+            } catch (dbError) {
+              console.error("Failed to save to database:", dbError);
+            }
+          }
+          // ---------------------------------------------------------
+
         } else {
           setDetectionStatus("No face detected in frame.");
           setFaceData(null);

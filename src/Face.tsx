@@ -2,7 +2,8 @@ import React, { useRef, useEffect, useState } from "react";
 import * as faceapi from "@vladmandic/face-api";
 
 interface FaceData {
-  gender: string;
+  detailedGender: string; // Boy, Girl, Man, Woman
+  rawGender: string;      // Male, Female
   genderProbability: number;
   age: number;
   expression: string;
@@ -12,11 +13,13 @@ interface FaceData {
 const FaceDetector: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const lastSavedTimeRef = useRef<number>(0);
-  
+
   // Gatekeepers
   const isDetectingRef = useRef<boolean>(false);
   const modelsLoadedRef = useRef<boolean>(false);
+
+  // NEW: Replaced the Date timer with a simple boolean cooldown lock
+  const isSavingCooldownRef = useRef<boolean>(false);
 
   const [isModelLoaded, setIsModelLoaded] = useState<boolean>(false);
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
@@ -26,7 +29,26 @@ const FaceDetector: React.FC = () => {
   );
   const [faceData, setFaceData] = useState<FaceData | null>(null);
 
-  // 1. Load ALL models (The library automatically handles the WebGL backend now!)
+  // 1. Define stopWebcam FIRST so useEffect can use it safely
+  const stopWebcam = () => {
+    isDetectingRef.current = false;
+
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      const tracks = stream.getTracks();
+      tracks.forEach((track) => track.stop());
+    }
+
+    setIsCameraActive(false);
+    setFaceData(null);
+
+    if (canvasRef.current) {
+      const ctx = canvasRef.current.getContext("2d");
+      ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    }
+  };
+
+  // 2. Load ALL models
   useEffect(() => {
     if (modelsLoadedRef.current) return;
     modelsLoadedRef.current = true;
@@ -57,56 +79,8 @@ const FaceDetector: React.FC = () => {
     return () => stopWebcam();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const stopWebcam = () => {
-    isDetectingRef.current = false;
-
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      const tracks = stream.getTracks();
-      tracks.forEach((track) => track.stop());
-    }
-
-    setIsCameraActive(false);
-    setFaceData(null);
-
-    if (canvasRef.current) {
-      const ctx = canvasRef.current.getContext("2d");
-      ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    }
-  };
-
-  const startWebcam = async () => {
-    setCameraError("");
-
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setCameraError(
-        "Camera API is blocked. You MUST open this link using HTTPS.",
-      );
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },
-        audio: false,
-      });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        setIsCameraActive(true);
-        setDetectionStatus("Camera authorized. Scanning...");
-      }
-    } catch (error: any) {
-      setCameraError(`Camera error: ${error.message || error.name}`);
-    }
-  };
-
-  // 2. Detect and DRAW
-  const handleVideoOnPlay = () => {
-    isDetectingRef.current = true;
-    // Give the browser 500ms to actually paint the video frame to the DOM
-    setTimeout(detectFaceLoop, 500);
-  };
-
+  // 3. Define the main detection loop
+  // 3. Define the main detection loop
   const detectFaceLoop = async () => {
     if (
       !isDetectingRef.current ||
@@ -117,7 +91,7 @@ const FaceDetector: React.FC = () => {
       return;
     }
 
-    // Require readyState === 4 (HAVE_ENOUGH_DATA) to ensure a complete frame is available
+    // Require readyState === 4 (HAVE_ENOUGH_DATA)
     if (
       videoRef.current.readyState === 4 &&
       videoRef.current.videoWidth > 0 &&
@@ -158,15 +132,40 @@ const FaceDetector: React.FC = () => {
             canvasRef.current.width,
             canvasRef.current.height,
           );
-          faceapi.draw.drawDetections(canvasRef.current, resizedDetection);
-          faceapi.draw.drawFaceLandmarks(canvasRef.current, resizedDetection);
 
-          // Extract Data safely
-          const genderProbability = Math.round(
-            detection.genderProbability * 100,
+          // Custom Landmark Styling
+          const drawOptions = new faceapi.draw.DrawFaceLandmarksOptions({
+            lineWidth: 1,          // Thin lines
+            pointSize: 1,          // Small dots
+            lineColor: '#00ffff',  // Cyan
+            pointColor: '#ff00ff', // Pink
+          });
+
+          const drawLandmarks = new faceapi.draw.DrawFaceLandmarks(
+            resizedDetection.landmarks,
+            drawOptions
           );
-          const gender = detection.gender === "male" ? "Man" : "Woman";
+          drawLandmarks.draw(canvasRef.current);
+
+          // =========================================================
+          // Data Extraction & Formatting
+          // =========================================================
           const age = Math.round(detection.age);
+          const genderProbability = Math.round(detection.genderProbability * 100);
+
+          // The AI returns exactly "male" or "female"
+          const rawAiGender = detection.gender;
+
+          // Format Male/Female with capital letters
+          const formattedRawGender = rawAiGender === "male" ? "Male" : "Female";
+
+          // Use Age to determine Boy vs Man, Girl vs Woman
+          let detailedGender = "";
+          if (rawAiGender === "male") {
+            detailedGender = age < 18 ? "Boy" : "Man";
+          } else {
+            detailedGender = age < 18 ? "Girl" : "Woman";
+          }
 
           const sortedExpressions = Object.entries(detection.expressions).sort(
             (a, b) => b[1] - a[1],
@@ -174,43 +173,65 @@ const FaceDetector: React.FC = () => {
           const [dominantExpression, expressionProb] = sortedExpressions[0];
           const expressionProbability = Math.round(expressionProb * 100);
 
+          // 1. Update the UI Cards
           setFaceData({
-            gender,
+            detailedGender,
+            rawGender: formattedRawGender,
             genderProbability,
             age,
             expression: dominantExpression,
             expressionProbability,
           });
 
-          // ---------------------------------------------------------
-          // NEW: Save data to MongoDB every 2 seconds, BUT ONLY if confidence is >= 90%
-          // ---------------------------------------------------------
-          const now = Date.now();
-          const SAVE_INTERVAL_MS = 2000;
+          // =========================================================
+          // MODIFIED: Stop & Save if Male is >= 70%
+          // =========================================================
 
-          if (now - lastSavedTimeRef.current > SAVE_INTERVAL_MS && genderProbability >= 90) {
-            lastSavedTimeRef.current = now;
+          if (rawAiGender === "male" && genderProbability >= 70 && !isSavingCooldownRef.current) {
+
+            isSavingCooldownRef.current = true; // Lock immediately to prevent duplicates
 
             try {
-              await fetch("http://localhost:5000/api/faces", {
+              fetch("http://localhost:5000/api/faces", {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
                 },
                 body: JSON.stringify({
-                  gender,
+                  detailedGender,
+                  rawGender: formattedRawGender,
                   genderProbability,
                   age,
                   expression: dominantExpression,
                   expressionProbability,
                 }),
-              });
-              console.log("Snapshot saved to database (High confidence hit)!");
+              })
+                .then((res) => res.json())
+                .then((data) => {
+                  console.log("✅ Saved to DB:", data);
+                  setDetectionStatus("Match Found & Saved! Camera Stopped.");
+
+                  // Turn off the camera hardware
+                  if (videoRef.current && videoRef.current.srcObject) {
+                    const stream = videoRef.current.srcObject as MediaStream;
+                    const tracks = stream.getTracks();
+                    tracks.forEach((track) => track.stop());
+                  }
+
+                  // Update UI States to break the loop but keep data visible
+                  setIsCameraActive(false);
+                  isDetectingRef.current = false;
+                })
+                .catch((err) => {
+                  console.error("❌ Fetch error:", err);
+                  isSavingCooldownRef.current = false; // Unlock if network fails so it can try again
+                });
             } catch (dbError) {
-              console.error("Failed to save to database:", dbError);
+              console.error("Failed to send to backend:", dbError);
+              isSavingCooldownRef.current = false;
             }
           }
-          // ---------------------------------------------------------
+          // =========================================================
 
         } else {
           setDetectionStatus("No face detected in frame.");
@@ -228,9 +249,41 @@ const FaceDetector: React.FC = () => {
       }
     }
 
-    // Trigger next frame only if still detecting, with a safe 150ms breather
     if (isDetectingRef.current) {
       setTimeout(detectFaceLoop, 150);
+    }
+  };
+
+  // 4. Define video play handler AFTER detectFaceLoop is defined
+  const handleVideoOnPlay = () => {
+    isDetectingRef.current = true;
+    setTimeout(detectFaceLoop, 500);
+  };
+
+  // 5. Start Webcam logic
+  const startWebcam = async () => {
+    setCameraError("");
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCameraError(
+        "Camera API is blocked. You MUST open this link using HTTPS.",
+      );
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user" },
+        audio: false,
+      });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        setIsCameraActive(true);
+        setDetectionStatus("Camera authorized. Scanning...");
+      }
+    } catch (error) {
+      const err = error as Error;
+      setCameraError(`Camera error: ${err.message || err.name || "Unknown error"}`);
     }
   };
 
@@ -285,14 +338,18 @@ const FaceDetector: React.FC = () => {
               borderRadius: "8px",
               border: "1px solid #90caf9",
               textAlign: "center",
+              minWidth: "140px"
             }}
           >
             <p style={{ margin: "0", fontSize: "14px", color: "#1565c0" }}>
-              Gender
+              Identity
             </p>
             <h3 style={{ margin: "5px 0 0 0" }}>
-              {faceData.gender} ({faceData.genderProbability}%)
+              {faceData.detailedGender}
             </h3>
+            <p style={{ margin: "5px 0 0 0", fontSize: "12px", color: "#1565c0" }}>
+              ({faceData.rawGender} - {faceData.genderProbability}%)
+            </p>
           </div>
           <div
             style={{
@@ -350,12 +407,15 @@ const FaceDetector: React.FC = () => {
       <div
         style={{
           position: "relative",
-          width: "100%",
-          maxWidth: "640px",
+          width: "300px",
+          height: "300px",
           backgroundColor: "#000",
           display: isCameraActive ? "block" : "none",
-          borderRadius: "8px",
+          borderRadius: "50%",
           overflow: "hidden",
+          border: "4px solid #007bff",
+          boxShadow: "0 4px 10px rgba(0,0,0,0.3)",
+          margin: "0 auto 20px auto",
         }}
       >
         <video
@@ -364,16 +424,24 @@ const FaceDetector: React.FC = () => {
           muted
           playsInline
           onPlay={handleVideoOnPlay}
-          style={{ width: "100%", height: "auto", display: "block" }}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            position: "absolute",
+            top: 0,
+            left: 0,
+          }}
         />
         <canvas
           ref={canvasRef}
           style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
             position: "absolute",
             top: 0,
             left: 0,
-            width: "100%",
-            height: "100%",
           }}
         />
       </div>

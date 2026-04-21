@@ -77,7 +77,7 @@ const FaceDetector: React.FC = () => {
     loadModels();
 
     return () => stopWebcam();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // 3. Define the main detection loop
   // 3. Define the main detection loop
